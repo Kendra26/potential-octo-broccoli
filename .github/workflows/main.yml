@@ -21,58 +21,68 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt update && sudo apt install deluged deluge-console jq curl zip -y
+          sudo apt update && sudo apt install qbittorrent-nox jq curl zip -y
           curl -o page.txt "https://equestria-eta.vercel.app/api/pages/dprjjMvC8fCF/raw"
 
-      - name: Download torrent content with Deluge
+      - name: Download torrent content with qBittorrent
         run: |
           mkdir -p "$FOLDER_PATH"
           
-          # Initialize default config directory
-          mkdir -p ~/.config/deluge
-          
-          # Start daemon and wait for initialization
-          deluged
+          # Pre-configure qBittorrent to bypass legal terms and localhost authentication
+          mkdir -p ~/.config/qBittorrent
+          cat << 'EOF' > ~/.config/qBittorrent/qBittorrent.conf
+          [LegalNotice]
+          Accepted=true
+
+          [Preferences]
+          WebUI\Port=8080
+          WebUI\LocalHostAuth=false
+          WebUI\AuthSubnetWhitelist=127.0.0.1/32
+          WebUI\AuthSubnetWhitelistEnabled=true
+          EOF
+
+          # Start qbittorrent daemon in background
+          qbittorrent-nox --agree-to-cli-only-notice -d
           sleep 5
 
-          # Enable allow_remote and disable auth requirement for local console
-          deluge-console "config -s allow_remote True"
-          
-          # Add torrent links from file
+          # Add magnet links via Web API
           while IFS= read -r link || [ -n "$link" ]; do
             link=$(echo "$link" | tr -d '\r')
             if [ -n "$link" ] && [[ ! "$link" =~ ^# ]]; then
-              echo "Adding to Deluge: $link"
-              deluge-console "add -p $PWD/$FOLDER_PATH $link"
+              echo "Adding to qBittorrent: $link"
+              curl -s -X POST \
+                -F "urls=$link" \
+                -F "savepath=$PWD/$FOLDER_PATH" \
+                http://127.0.0.1:8080/api/v2/torrents/add
             fi
           done < page.txt
 
           echo "Waiting for all torrents to finish downloading..."
           
-          # Monitoring loop
+          # Monitoring loop via Web API
           while true; do
             sleep 10
             
-            INFO=$(deluge-console "info")
-            echo "$INFO"
+            RESPONSE=$(curl -s http://127.0.0.1:8080/api/v2/torrents/info)
             
-            DOWNLOADING=$(echo "$INFO" | grep -c "State: Downloading" || true)
-            TOTAL=$(echo "$INFO" | grep -c "Name:" || true)
+            TOTAL=$(echo "$RESPONSE" | jq '. | length' 2>/dev/null || echo "0")
+            INCOMPLETE=$(echo "$RESPONSE" | jq '[.[] | select(.progress < 1)] | length' 2>/dev/null || echo "0")
             
             if [ "$TOTAL" -eq 0 ]; then
               echo "No active torrents found."
               break
             fi
 
-            echo "--> Active torrents: $TOTAL | Still downloading: $DOWNLOADING"
+            echo "--> Total torrents: $TOTAL | Incomplete: $INCOMPLETE"
             
-            if [ "$DOWNLOADING" -eq 0 ] && [ "$TOTAL" -gt 0 ]; then
+            if [ "$INCOMPLETE" -eq 0 ] && [ "$TOTAL" -gt 0 ]; then
               echo "All downloads completed!"
               break
             fi
           done
 
-          pkill deluged || true
+          # Stop qbittorrent daemon
+          pkill qbittorrent-nox || true
           sleep 2
 
       - name: Zip downloaded files
