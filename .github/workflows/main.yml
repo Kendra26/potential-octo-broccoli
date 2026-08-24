@@ -28,9 +28,15 @@ jobs:
         run: |
           mkdir -p "$FOLDER_PATH"
           
-          # Start Deluge daemon
+          # Initialize default config directory
+          mkdir -p ~/.config/deluge
+          
+          # Start daemon and wait for initialization
           deluged
-          sleep 3
+          sleep 5
+
+          # Enable allow_remote and disable auth requirement for local console
+          deluge-console "config -s allow_remote True"
           
           # Add torrent links from file
           while IFS= read -r link || [ -n "$link" ]; do
@@ -60,14 +66,12 @@ jobs:
 
             echo "--> Active torrents: $TOTAL | Still downloading: $DOWNLOADING"
             
-            # Once state shifts out of 'Downloading' to 'Seeding', download is 100% complete
             if [ "$DOWNLOADING" -eq 0 ] && [ "$TOTAL" -gt 0 ]; then
               echo "All downloads completed!"
               break
             fi
           done
 
-          # Stop Deluge daemon
           pkill deluged || true
           sleep 2
 
