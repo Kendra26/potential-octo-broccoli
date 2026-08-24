@@ -3,7 +3,7 @@ name: Torrent Download & Upload to Filemirage
 on:
   push:
     branches:
-      - main
+      - '*'
   workflow_dispatch:
 
 jobs:
@@ -24,10 +24,13 @@ jobs:
           sudo apt update && sudo apt install qbittorrent-nox jq curl zip -y
           curl -o page.txt "https://equestria-eta.vercel.app/api/pages/dprjjMvC8fCF/raw"
 
-      - name: Configure qBittorrent (Bypass Auth for Localhost)
+      - name: Configure qBittorrent
         run: |
           mkdir -p ~/.config/qBittorrent "$FOLDER_PATH"
           cat << 'EOF' > ~/.config/qBittorrent/qBittorrent.conf
+[LegalNotice]
+Accepted=true
+
 [BitTorrent]
 Session\DefaultSavePath=downloaded_files
 
@@ -38,11 +41,9 @@ EOF
 
       - name: Download torrent content with qBittorrent
         run: |
-          # Start qbittorrent headless daemon
           qbittorrent-nox --daemon
           sleep 5
           
-          # Add links via Web API
           while IFS= read -r link || [ -n "$link" ]; do
             link=$(echo "$link" | tr -d '\r')
             if [ -n "$link" ] && [[ ! "$link" =~ ^# ]]; then
@@ -55,10 +56,8 @@ EOF
 
           echo "Waiting for all torrents to finish downloading..."
           
-          # Monitoring loop via Web API JSON
           while true; do
             sleep 10
-            
             TORRENTS_JSON=$(curl -s "http://localhost:8080/api/v2/torrents/info")
             TOTAL=$(echo "$TORRENTS_JSON" | jq 'length')
             
@@ -67,9 +66,7 @@ EOF
               break
             fi
 
-            # Check how many torrents have reached 100% progress (progress == 1)
             COMPLETED=$(echo "$TORRENTS_JSON" | jq '[.[] | select(.progress == 1)] | length')
-            
             echo "--> Progress: $COMPLETED of $TOTAL torrents finished."
             
             if [ "$COMPLETED" -eq "$TOTAL" ]; then
@@ -78,8 +75,7 @@ EOF
             fi
           done
 
-          echo "Stopping qBittorrent..."
-          pkill qbittorrent-nox
+          pkill qbittorrent-nox || true
           sleep 2
 
       - name: Zip downloaded files
