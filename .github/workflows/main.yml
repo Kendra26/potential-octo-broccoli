@@ -42,7 +42,7 @@ jobs:
           EOF
 
           # Start qbittorrent daemon in background
-          qbittorrent-nox
+          qbittorrent-nox -d
           sleep 5
 
           # Add magnet links via Web API
