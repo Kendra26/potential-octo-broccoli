@@ -3,7 +3,7 @@ name: Torrent Download & Upload to Filemirage
 on:
   push:
     branches:
-      - Neew
+      - '*'
   workflow_dispatch:
 
 jobs:
@@ -97,6 +97,13 @@ jobs:
           download_dir = os.path.abspath(os.environ.get("FOLDER_PATH", "downloaded_files"))
           FILEMIRAGE_TOKEN = os.environ.get("FILEMIRAGE_API_TOKEN", "")
 
+          # Extensions ignored when calculating file thresholds (>5, >3)
+          IGNORED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.txt', '.nfo'}
+
+          def is_counted_file(filepath):
+              ext = os.path.splitext(filepath)[1].lower()
+              return ext not in IGNORED_EXTENSIONS
+
           def zip_directory(dir_path, zip_output_path):
               with zipfile.ZipFile(zip_output_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                   for root, _, files in os.walk(dir_path):
@@ -149,14 +156,15 @@ jobs:
 
           final_upload_files = []
 
-          # Step A: Check subdirectories for > 5 files
+          # Step A: Check subdirectories for > 5 counted files
           for item in os.listdir(download_dir):
               full_path = os.path.join(download_dir, item)
               if os.path.isdir(full_path):
                   dir_files = [os.path.join(r, f) for r, _, fs in os.walk(full_path) for f in fs]
-                  if len(dir_files) > 5:
+                  counted_files = [f for f in dir_files if is_counted_file(f)]
+                  if len(counted_files) > 5:
                       zip_name = os.path.join(download_dir, f"{item}.zip")
-                      print(f"Subfolder '{item}' has {len(dir_files)} files (>5). Zipping into '{item}.zip'...")
+                      print(f"Subfolder '{item}' has {len(counted_files)} counted files (>5). Zipping into '{item}.zip'...")
                       zip_directory(full_path, zip_name)
                       final_upload_files.append(zip_name)
                       shutil.rmtree(full_path)
@@ -190,33 +198,36 @@ jobs:
           small_series_titles = []
 
           for show_title, files in series_groups.items():
-              if len(files) > 3:
+              counted_in_group = [f for f in files if is_counted_file(f)]
+              if len(counted_in_group) > 3:
                   files.sort()
                   zip_name = get_concise_zip_name([show_title], download_dir)
-                  print(f"Series '{show_title}' has {len(files)} files (>3). Zipping into '{os.path.basename(zip_name)}'...")
+                  print(f"Series '{show_title}' has {len(counted_in_group)} counted file(s) (>3). Zipping into '{os.path.basename(zip_name)}'...")
                   zip_files(files, zip_name)
                   final_upload_files.append(zip_name)
                   for f in files:
                       if os.path.exists(f): os.remove(f)
               else:
-                  print(f"Series '{show_title}' has {len(files)} file(s) (<=3). Collecting for potential zip bundle...")
+                  print(f"Series '{show_title}' has {len(counted_in_group)} counted file(s) (<=3). Collecting for potential zip bundle...")
                   small_series_files.extend(files)
                   small_series_titles.append(show_title)
 
-          if len(small_series_files) >= 3:
+          # Zip small series files ONLY if total counted files across small series is >= 3
+          counted_small_files = [f for f in small_series_files if is_counted_file(f)]
+          if len(counted_small_files) >= 3:
               bundle_zip_name = get_concise_zip_name(small_series_titles, download_dir)
-              print(f"Zipping {len(small_series_files)} small series file(s) (>=3 total) together into '{os.path.basename(bundle_zip_name)}'...")
+              print(f"Zipping {len(small_series_files)} small series file(s) ({len(counted_small_files)} counted files >=3 total) together into '{os.path.basename(bundle_zip_name)}'...")
               zip_files(small_series_files, bundle_zip_name)
               final_upload_files.append(bundle_zip_name)
               for f in small_series_files:
                   if os.path.exists(f): os.remove(f)
           elif small_series_files:
-              print(f"Only {len(small_series_files)} small series file(s) (<3 total). Skipping zip, uploading as unzipped files.")
+              print(f"Only {len(counted_small_files)} counted small series file(s) (<3 total). Skipping zip, uploading as unzipped files.")
               final_upload_files.extend(small_series_files)
 
           final_upload_files.extend(non_series_files)
 
-          # Fetch Filemirage server and upload
+          # Fetch Filemirage server and upload using curl
           print("\nFetching Filemirage server...")
           try:
               srv_resp = requests.get("https://filemirage.com/api/servers", timeout=15).json()
